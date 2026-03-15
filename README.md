@@ -18,9 +18,9 @@
 | :---: | :---: | :---: |
 | ![JSON Input](./public/demo-1.png) | ![Schema Output](./public/demo-2.png) | ![Relationship Map](./public/demo-3.png) |
 
-video demo
+## Video Demo
 
-![video demo](./public/demo_video.mp4)
+<video src="./public/demo_video.mp4" width="100%" controls autoplay muted loop></video>
 
 ---
 
