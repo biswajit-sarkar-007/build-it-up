@@ -20,7 +20,7 @@
 
 ## Video Demo
 
-<video src="./public/demo_video.mp4" width="100%" controls autoplay muted loop></video>
+<video src="./public/demo_video.mp4" width="100%" height="100%" controls autoplay muted loop></video>
 
 ---
 
