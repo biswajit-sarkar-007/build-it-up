@@ -5,7 +5,7 @@ import JsonInputPanel from '@/components/JsonInputPanel';
 import SchemaOutputTabs from '@/components/SchemaOutputTabs';
 import RelationshipMap from '@/components/RelationshipMap';
 import { analyzeJSON } from '@/lib/jsonAnalyzer';
-import { generatePostgreSQL, generateMongoose, generatePrisma } from '@/lib/schemaGenerators';
+import { generatePostgreSQL, generateMongoose, generatePrisma, generateDrizzle } from '@/lib/schemaGenerators';
 import type { SchemaIR } from '@/lib/schemaIR';
 
 const AppSection: React.FC = () => {
@@ -14,6 +14,7 @@ const AppSection: React.FC = () => {
     postgresql: string;
     mongoose: string;
     prisma: string;
+    drizzle: string;
   } | null>(null);
 
   const handleJsonSubmit = useCallback((json: unknown) => {
@@ -24,7 +25,8 @@ const AppSection: React.FC = () => {
     const postgresql = generatePostgreSQL(ir);
     const mongoose = generateMongoose(ir);
     const prisma = generatePrisma(ir);
-    setResult({ ir, postgresql, mongoose, prisma });
+    const drizzle = generateDrizzle(ir);
+    setResult({ ir, postgresql, mongoose, prisma, drizzle });
   }, []);
 
   const handleBack = () => setResult(null);
@@ -82,6 +84,7 @@ const AppSection: React.FC = () => {
                     postgresql={result.postgresql}
                     mongoose={result.mongoose}
                     prisma={result.prisma}
+                    drizzle={result.drizzle}
                     ir={result.ir}
                   />
                 </div>

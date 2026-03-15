@@ -10,10 +10,11 @@ interface SchemaOutputTabsProps {
   postgresql: string;
   mongoose: string;
   prisma: string;
+  drizzle: string;
   ir: SchemaIR;
 }
 
-const SchemaOutputTabs: React.FC<SchemaOutputTabsProps> = ({ postgresql, mongoose, prisma, ir }) => {
+const SchemaOutputTabs: React.FC<SchemaOutputTabsProps> = ({ postgresql, mongoose, prisma, drizzle, ir }) => {
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, tab: string) => {
@@ -27,12 +28,14 @@ const SchemaOutputTabs: React.FC<SchemaOutputTabsProps> = ({ postgresql, mongoos
     zip.file('schema.sql', postgresql);
     zip.file('schema.js', mongoose);
     zip.file('schema.prisma', prisma);
+    zip.file('schema.ts', drizzle);
     const blob = await zip.generateAsync({ type: 'blob' });
     saveAs(blob, 'schemagen-output.zip');
   };
 
   const tabs = [
     { id: 'postgresql', label: '🐘 PostgreSQL', content: postgresql, ext: '.sql', color: 'text-cyan' },
+    { id: 'drizzle', label: '🌧️ Drizzle', content: drizzle, ext: '.ts', color: 'text-yellow' },
     { id: 'mongodb', label: '🍃 MongoDB', content: mongoose, ext: '.js', color: 'text-emerald' },
     { id: 'prisma', label: '◆ Prisma', content: prisma, ext: '.prisma', color: 'text-violet' },
   ];

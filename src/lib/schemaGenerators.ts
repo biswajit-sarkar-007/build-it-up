@@ -14,7 +14,10 @@ export function generatePostgreSQL(ir: SchemaIR): string {
       else if (col.primaryKey) def += ' PRIMARY KEY';
       if (col.unique && !col.primaryKey) def += ' UNIQUE';
       if (!col.nullable && !col.primaryKey) def += ' NOT NULL';
-      if (col.default) def += ` DEFAULT ${col.default}`;
+      if (col.default !== undefined) {
+        const isNum = !isNaN(Number(col.default)) && col.default.trim() !== '';
+        def += ` DEFAULT ${isNum ? col.default : col.default}`;
+      }
       if (col.foreignKey) def += ` REFERENCES ${col.foreignKey.table}(${col.foreignKey.column}) ON DELETE CASCADE`;
       if (col.enum && col.enum.length > 0) def += ` CHECK (${col.name} IN (${col.enum.map(e => `'${e}'`).join(', ')}))`;
       colDefs.push(def);
@@ -25,8 +28,11 @@ export function generatePostgreSQL(ir: SchemaIR): string {
     lines.push('');
   }
 
-  // Index suggestions
-  const allIndexes = ir.tables.flatMap(t => t.indexes);
+  // Index suggestions — skip columns already covered by PK or UNIQUE
+  const allIndexes = ir.tables.flatMap(t => {
+    const pkAndUniqueCols = new Set(t.columns.filter(c => c.primaryKey || c.unique).map(c => c.name));
+    return t.indexes.filter(idx => !pkAndUniqueCols.has(idx.column));
+  });
   if (allIndexes.length > 0) {
     lines.push('-- Index suggestions (AI-recommended)');
     for (const idx of allIndexes) {
@@ -40,6 +46,7 @@ export function generatePostgreSQL(ir: SchemaIR): string {
 // --- Mongoose Schema Generator ---
 function mongooseType(col: ColumnDef): string {
   if (col.foreignKey) return `mongoose.Schema.Types.ObjectId`;
+  if (col.type === 'decimal') return 'mongoose.Schema.Types.Decimal128';
   return col.mongoType;
 }
 
@@ -57,8 +64,12 @@ export function generateMongoose(ir: SchemaIR): string {
     lines.push(`const ${schemaName} = new mongoose.Schema({`);
 
     const colLines: string[] = [];
+    const hasLifecycleFields = table.columns.some(c => c.name === 'created_at' || c.name === 'updated_at');
+
     for (const col of table.columns) {
       if (col.name === 'id' || col.name === '_id') continue; // MongoDB handles _id
+      // Skip lifecycle fields — Mongoose handles them with { timestamps: true }
+      if (hasLifecycleFields && (col.name === 'created_at' || col.name === 'updated_at')) continue;
 
       const props: string[] = [];
       props.push(`type: ${mongooseType(col)}`);
@@ -67,14 +78,25 @@ export function generateMongoose(ir: SchemaIR): string {
       if (col.unique) props.push('unique: true');
       if (col.index) props.push('index: true');
       if (col.enum && col.enum.length > 0) props.push(`enum: [${col.enum.map(e => `'${e}'`).join(', ')}]`);
-      if (col.default === 'NOW()') props.push('default: Date.now');
-      if (col.maxLength) props.push(`maxlength: ${col.maxLength}`);
+      if (col.default === 'NOW()') {
+        props.push('default: Date.now');
+      } else if (col.default !== undefined) {
+        const isNum = !isNaN(Number(col.default)) && col.default.trim() !== '';
+        props.push(`default: ${isNum ? col.default : `'${col.default}'`}`);
+      }
+      if (col.maxLength && !col.foreignKey && col.type !== 'enum') {
+        props.push(`maxlength: ${col.maxLength}`);
+      }
 
       colLines.push(`  ${toCamelCase(col.name)}: { ${props.join(', ')} }`);
     }
 
     lines.push(colLines.join(',\n'));
-    lines.push('});');
+    if (hasLifecycleFields) {
+      lines.push('}, { timestamps: { createdAt: \'created_at\', updatedAt: \'updated_at\' } });');
+    } else {
+      lines.push('});');
+    }
     lines.push('');
   }
 
@@ -114,8 +136,8 @@ export function generatePrisma(ir: SchemaIR): string {
       
       if (col.foreignKey) {
         const refModel = capitalize(singularize(col.foreignKey.table));
-        // Add the scalar field
-        line += ` Int`;
+        // Use the correct scalar type from the IR instead of always Int
+        line += ` ${col.prismaType}`;
         if (col.unique) line += ' @unique';
         lines.push(line);
         // Add the relation field
@@ -128,21 +150,36 @@ export function generatePrisma(ir: SchemaIR): string {
       if (col.primaryKey) {
         line += ' @id';
         if (col.autoIncrement) line += ' @default(autoincrement())';
+        if (col.type === 'uuid') line += ' @default(uuid())';
       }
       if (col.unique && !col.primaryKey) line += ' @unique';
       if (col.nullable) line += '?';
-      if (col.default === 'NOW()') line += ' @default(now())';
+      if (col.default === 'NOW()') {
+        if (col.name === 'updated_at') {
+          line += ' @updatedAt';
+        } else {
+          line += ' @default(now())';
+        }
+      } else if (col.default !== undefined && !col.primaryKey) {
+        const isNum = !isNaN(Number(col.default)) && col.default.trim() !== '';
+        line += ` @default(${isNum ? col.default : `"${col.default}"`})`;
+      }
 
       lines.push(line);
     }
 
-    // Add relation arrays from other tables pointing here
+    // Add relation arrays (or single fields for 1:1) from other tables pointing here
     for (const otherTable of ir.tables) {
       if (otherTable.name === table.name) continue;
       const fkCols = otherTable.columns.filter(c => c.foreignKey?.table === table.name);
-      if (fkCols.length > 0) {
+      for (const fkCol of fkCols) {
         const otherModel = capitalize(singularize(otherTable.name));
-        lines.push(`  ${toCamelCase(otherTable.name)} ${otherModel}[]`);
+        const fieldName = toCamelCase(otherTable.name);
+        if (fkCol.unique) {
+          lines.push(`  ${singularize(fieldName)} ${otherModel}?`);
+        } else {
+          lines.push(`  ${fieldName} ${otherModel}[]`);
+        }
       }
     }
 
@@ -156,6 +193,130 @@ export function generatePrisma(ir: SchemaIR): string {
 
     lines.push('}');
     lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// --- Drizzle Schema Generator ---
+export function generateDrizzle(ir: SchemaIR): string {
+  const lines: string[] = [
+    '// Generated by SchemaGen AI',
+    "import { pgTable, serial, text, varchar, timestamp, integer, boolean, numeric, uuid, jsonb, pgEnum } from 'drizzle-orm/pg-core';",
+    "import { relations } from 'drizzle-orm';",
+    '',
+  ];
+
+  // Enums
+  const enumsSeen = new Set<string>();
+  for (const table of ir.tables) {
+    for (const col of table.columns) {
+      if (col.type === 'enum' && col.enum) {
+        const enumName = `${toCamelCase(col.name)}Enum`;
+        if (!enumsSeen.has(enumName)) {
+          lines.push(`export const ${enumName} = pgEnum('${col.name}', [${col.enum.map(e => `'${e}'`).join(', ')}]);`);
+          enumsSeen.add(enumName);
+        }
+      }
+    }
+  }
+  if (enumsSeen.size > 0) lines.push('');
+
+  for (const table of ir.tables) {
+    const tableName = table.name;
+    const variableName = toCamelCase(table.name);
+    
+    lines.push(`export const ${variableName} = pgTable('${tableName}', {`);
+    
+    const colLines: string[] = [];
+    for (const col of table.columns) {
+      let colDef = `  ${toCamelCase(col.name)}: `;
+      
+      if (col.primaryKey && col.pgType === 'SERIAL') {
+        colDef += `serial('${col.name}')`;
+      } else if (col.type === 'enum' && col.enum) {
+        const enumName = `${toCamelCase(col.name)}Enum`;
+        colDef += `${enumName}('${col.name}')`;
+      } else {
+        switch (col.type) {
+          case 'integer': colDef += `integer('${col.name}')`; break;
+          case 'string': colDef += `varchar('${col.name}', { length: ${col.maxLength || 255} })`; break;
+          case 'text': colDef += `text('${col.name}')`; break;
+          case 'boolean': colDef += `boolean('${col.name}')`; break;
+          case 'decimal': colDef += `numeric('${col.name}', { precision: 10, scale: 2 })`; break;
+          case 'date': colDef += `timestamp('${col.name}', { withTimezone: true })`; break;
+          case 'uuid': colDef += `uuid('${col.name}')`; break;
+          case 'mixed': colDef += `jsonb('${col.name}')`; break;
+          case 'email': colDef += `varchar('${col.name}', { length: 255 })`; break;
+          default: colDef += `text('${col.name}')`;
+        }
+      }
+
+      if (col.primaryKey) {
+        colDef += '.primaryKey()';
+        if (col.type === 'uuid') colDef += '.defaultRandom()';
+      }
+      if (!col.nullable && !col.primaryKey) colDef += '.notNull()';
+      if (col.unique && !col.primaryKey) colDef += '.unique()';
+      
+      if (col.default === 'NOW()') {
+        colDef += '.defaultNow()';
+        if (col.name === 'updated_at') colDef += '.$onUpdate(() => new Date())';
+      } else if (col.default !== undefined) {
+        const isNum = !isNaN(Number(col.default)) && col.default.trim() !== '';
+        colDef += `.default(${isNum ? col.default : `'${col.default}'`})`;
+      }
+
+      if (col.foreignKey) {
+        const refTableVar = toCamelCase(col.foreignKey.table);
+        colDef += `.references(() => ${refTableVar}.${col.foreignKey.column})`;
+      }
+
+      colLines.push(colDef);
+    }
+    
+    lines.push(colLines.join(',\n'));
+    lines.push('});');
+    lines.push('');
+  }
+
+  // Relations
+  for (const table of ir.tables) {
+    const variableName = toCamelCase(table.name);
+    const relationsList: string[] = [];
+    
+    // belongsTo
+    for (const col of table.columns) {
+      if (col.foreignKey) {
+        const refTableVar = toCamelCase(col.foreignKey.table);
+        const relationName = toCamelCase(col.name).replace(/Id$/, '');
+        relationsList.push(`  ${relationName}: one(${refTableVar}, { fields: [${variableName}.${toCamelCase(col.name)}], references: [${refTableVar}.${col.foreignKey.column}] })`);
+      }
+    }
+    
+    // hasMany or hasOne
+    for (const otherTable of ir.tables) {
+      if (otherTable.name === table.name) continue;
+      const fkCols = otherTable.columns.filter(c => c.foreignKey?.table === table.name);
+      for (const fkCol of fkCols) {
+        const otherTableVar = toCamelCase(otherTable.name);
+        if (fkCol.unique) {
+          // 1:1 relation
+          const singularName = singularize(otherTableVar);
+          relationsList.push(`  ${singularName}: one(${otherTableVar})`);
+        } else {
+          // 1:N relation
+          relationsList.push(`  ${otherTableVar}: many(${otherTableVar})`);
+        }
+      }
+    }
+    
+    if (relationsList.length > 0) {
+      lines.push(`export const ${variableName}Relations = relations(${variableName}, ({ one, many }) => ({`);
+      lines.push(relationsList.join(',\n'));
+      lines.push('}));');
+      lines.push('');
+    }
   }
 
   return lines.join('\n');
