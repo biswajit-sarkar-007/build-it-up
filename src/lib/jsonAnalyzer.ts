@@ -174,6 +174,7 @@ export function analyzeJSON(input: unknown): SchemaIR {
     if (input.length === 0) { warnings.push('Empty array provided'); return { tables: [], relationships: [], indexes: [], warnings }; }
     rootArray = input.filter(item => typeof item === 'object' && item !== null) as Record<string, unknown>[];
     if (rootArray.length === 0) { warnings.push('Array contains no objects'); return { tables: [], relationships: [], indexes: [], warnings }; }
+    processTable('items', rootArray, tables, warnings);
   } else if (typeof input === 'object' && input !== null) {
     // Check if it's a single object with array values (multi-entity)
     const entries = Object.entries(input as Record<string, unknown>);
